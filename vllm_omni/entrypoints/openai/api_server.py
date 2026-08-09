@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from http import HTTPStatus
 from numbers import Integral
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Annotated, Any, Literal, cast
 
 import httpx
@@ -153,7 +154,6 @@ from vllm_omni.entrypoints.openai.video_api_utils import (
     decode_input_reference,
 )
 from vllm_omni.entrypoints.openpi.serving import ServingRealtimeRobotOpenPI
-from vllm_omni.entrypoints.utils import PureDiffusionLauncherAdapter
 from vllm_omni.errors import OmniClientError
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
 from vllm_omni.utils.forced_aligner import build_forced_aligner_config
@@ -274,6 +274,34 @@ async def _get_vllm_config(engine_client: EngineClient) -> Any:
     if hasattr(engine_client, "get_vllm_config"):
         return await engine_client.get_vllm_config()
     return getattr(engine_client, "vllm_config", None)
+
+
+class _PureDiffusionLauncherAdapter:
+    """vLLM launcher compatibility shim for pure-diffusion mode.
+
+    The upstream launcher's shutdown path reads
+    ``app.state.engine_client.vllm_config.shutdown_timeout``
+    (vllm/entrypoints/launcher.py), but ``AsyncOmni.vllm_config`` returns
+    ``None`` when the pipeline has no comprehension stage (pure diffusion),
+    which crashes ``handle_shutdown`` with AttributeError and hangs server
+    teardown (workers force-killed, spurious resource_tracker noise).
+
+    This adapter only overrides the ``vllm_config`` property with a minimal
+    fallback carrying ``shutdown_timeout`` and forwards every other attribute
+    to the wrapped engine client, so the pure-diffusion detection
+    (``get_vllm_config()`` still returns ``None``) is unaffected.
+    """
+
+    def __init__(self, engine_client: Any, shutdown_timeout: float) -> None:
+        object.__setattr__(self, "_wrapped", engine_client)
+        object.__setattr__(self, "_shutdown_timeout", float(shutdown_timeout))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._wrapped, name)
+
+    @property
+    def vllm_config(self) -> Any:
+        return SimpleNamespace(shutdown_timeout=self._shutdown_timeout)
 
 
 def _remove_route_from_app(app, path: str, methods: frozenset[str] | None = None):
@@ -557,7 +585,7 @@ async def omni_run_server_worker(listen_address, sock, args, client_config=None,
             # crash handle_shutdown and hang teardown. Wrap app.state.engine_client
             # with a shim that only overrides vllm_config and forwards everything
             # else (get_vllm_config still returns None for pure-diffusion detection).
-            app.state.engine_client = PureDiffusionLauncherAdapter(
+            app.state.engine_client = _PureDiffusionLauncherAdapter(
                 engine_client,
                 shutdown_timeout=getattr(args, "shutdown_timeout", 0),
             )
@@ -997,11 +1025,9 @@ async def omni_init_app_state(
     )
 
     # Warm up chat template processing to avoid first-request latency
-    # Upstream f5ffc59b6a moved warmup onto OnlineRenderer. Accelerator
-    # images can temporarily lag that renderer API, where warmup is optional.
-    renderer_warmup = getattr(state.online_renderer, "warmup", None)
-    if renderer_warmup is not None:
-        renderer_warmup()
+    # Upstream f5ffc59b6a removed OpenAIServingChat.warmup() and moved the
+    # warmup onto the renderer (OnlineRenderer.warmup()); mirror upstream.
+    state.online_renderer.warmup()
 
     state.openai_serving_completion = (
         OpenAIServingCompletion(
