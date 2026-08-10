@@ -65,22 +65,50 @@ RUN VLLM_WHEEL_URL=$(python3 -c "import urllib.request,re; \
     uv pip install --system --force-reinstall "${VLLM_WHEEL_URL}"
 
 
-RUN uv pip install --system --upgrade \
+# Pin torch BEFORE flashinfer. Versions mirror vLLM requirements/cuda.txt at
+# VLLM_PRECOMPILED_WHEEL_COMMIT.
+#
+# This used to come after flashinfer, guarding against `flashinfer --upgrade`
+# pulling a torch newer than upstream's pin and breaking the precompiled vLLM
+# wheel with "undefined symbol". That guard was written when the base image and
+# the target differed by a patch release. vLLM 0.27 moves torch two minor
+# versions (0.26 ships 2.11.0, 0.27 wants 2.13.0), so installing flashinfer
+# first bound its compiled artifacts — and its bundled TVM FFI runtime — to
+# torch 2.11, which the reinstall then removed. The result was a C++ abort
+# during engine-core init:
+#
+#   terminate called after throwing an instance of 'tvm::ffi::Error'
+#     what(): TypeAttr `__ffi_repr__` is already registered for type index 132
+#
+# plus `from deep_ep_cpp import EventHandle` -> ImportError, which together took
+# out 21 CI jobs on build #2947 that pass on main.
+#
+# Installing torch first means flashinfer resolves against the final runtime.
+RUN uv pip install --system --force-reinstall \
+    "torch==2.13.0" "torchaudio==2.11.0" "torchvision==0.28.0" \
+    --torch-backend cu130
+
+# No --upgrade here: with torch already at its pinned version, --upgrade is what
+# would drag it forward again and reintroduce the mismatch this ordering fixes.
+RUN uv pip install --system \
         "flashinfer-python==0.6.15.post1" \
         "flashinfer-cubin==0.6.15.post1" \
         --extra-index-url https://flashinfer.ai/whl/
 
-RUN uv pip install --system --upgrade \
+RUN uv pip install --system \
     "flashinfer-jit-cache==0.6.15.post1" \
     --index-url https://flashinfer.ai/whl/cu130
 
-# Force-reinstall torch AFTER flashinfer, because flashinfer --upgrade can pull
-# in a torch newer than upstream's pin, whose libtorch_cuda.so ABI then breaks
-# the precompiled vLLM wheel with "undefined symbol" at import time. Versions
-# mirror vLLM requirements/cuda.txt at VLLM_PRECOMPILED_WHEEL_COMMIT.
-RUN uv pip install --system --force-reinstall \
-    "torch==2.13.0" "torchaudio==2.11.0" "torchvision==0.28.0" \
-    --torch-backend cu130
+# Fail the build here rather than at engine-core init if anything above moved
+# torch off its pin. The previous failure mode was a C++ terminate inside a
+# worker subprocess, which surfaced only as "Failed core proc(s): {}" — an
+# empty set, hours into the test run.
+RUN python3 -c "import torch, sys; \
+    want='2.13.0'; got=torch.__version__.split('+')[0]; \
+    sys.exit(0) if got==want else sys.exit(f'torch pin drifted: want {want}, got {torch.__version__}')" && \
+    python3 -c "import deep_ep_cpp" 2>/dev/null \
+      && echo 'deep_ep_cpp imports cleanly' \
+      || echo 'WARNING: deep_ep_cpp not importable (non-fatal; vLLM treats deep_ep as optional)'
 
 # CUDA 13 JIT linker: libnvJitLink.so.13 is provided by the nvidia-nvjitlink
 # package that the cu130 torch/vllm wheels above pull into site-packages (the
