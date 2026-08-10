@@ -39,10 +39,8 @@ from pytest_mock import MockerFixture
 from vllm import SamplingParams
 from vllm.outputs import CompletionOutput, RequestOutput
 
-from vllm_omni.config.server_settings import SERVER_SETTINGS_CONFIG
 from vllm_omni.entrypoints.async_omni import AsyncOmni as RealAsyncOmni
 from vllm_omni.entrypoints.cli.serve import OmniServeCommand
-from vllm_omni.entrypoints.openai.storage import STORAGE_MANAGER
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser
@@ -517,29 +515,8 @@ def mock_async_omni(
 
 
 @pytest.fixture
-def api_server(unused_tcp_port_factory, server_case: ServerCase, mock_async_omni, tmp_path, monkeypatch):
+def api_server(unused_tcp_port_factory, server_case: ServerCase, mock_async_omni):
     """Set up a API server in background process from command line with parametrized model name and mocked AsyncOmni."""
-    # Give the server a writable file-backend dir. Its default is /tmp/storage
-    # (vllm_omni/config/server_settings.py), which on a shared host is
-    # root-owned and unwritable, so every video-generation request 500s with
-    #   [Errno 13] Permission denied: '/tmp/storage/tmpXXXX'
-    # and the node raises RuntimeError.
-    #
-    # The env var alone cannot fix this, because the path is captured twice at
-    # import time and both have already happened when this fixture runs:
-    #   server_settings.py:58  SERVER_SETTINGS_CONFIG = ServerSettings()
-    #   storage.py:210         STORAGE_MANAGER = get_storage_manager(...storage)
-    # STORAGE_MANAGER copies the path into its own storage_path, so it is the
-    # object the running server actually writes through. Patch all three: the
-    # env (for a spawned child, which re-imports and re-reads it), the settings
-    # singleton, and the live manager (for a forked child, which inherits them).
-    # Same intent as tests/dfx/perf/scripts/run_diffusion_benchmark.py::_start_server.
-    storage_path = tmp_path / "storage"
-    storage_path.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("VLLM_OMNI_STORAGE_PATH", str(storage_path))
-    monkeypatch.setattr(SERVER_SETTINGS_CONFIG.storage, "path", str(storage_path), raising=False)
-    monkeypatch.setattr(STORAGE_MANAGER, "storage_path", str(storage_path.resolve()), raising=False)
-
     parser = TrackingArgumentParser()
     subparsers = parser.add_subparsers(dest="command")
     cmd = OmniServeCommand()
