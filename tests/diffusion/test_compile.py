@@ -120,3 +120,36 @@ def test_compiled_block_does_not_swallow_model_errors(monkeypatch):
 
     with pytest.raises(ValueError, match="genuine model bug"):
         model.transformer_blocks[0].forward("x")
+
+
+def test_compiled_block_preserves_forward_signature_for_inspection(monkeypatch):
+    """cache-dit matches blocks via inspect.signature(block.forward).
+
+    The eager-fallback wrapper must stay signature-transparent: parameter
+    names and the return annotation drive cache-dit's ForwardPattern match
+    (build 2954, Multi-GPU Layered job failed when a bare *args/**kwargs
+    wrapper hid them).
+    """
+    import inspect
+
+    import torch
+
+    class _SignatureBlock(nn.Module):
+        def forward(self, hidden_states, encoder_hidden_states=None) -> "torch.Tensor":
+            return hidden_states
+
+    class _Model(nn.Module):
+        _repeated_blocks = ["_SignatureBlock"]
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.blocks = nn.ModuleList([_SignatureBlock()])
+
+    model = _Model()
+    monkeypatch.setattr(compile_module.torch, "compile", lambda fn, *a, **k: fn)
+    regionally_compile(model)
+
+    sig = inspect.signature(model.blocks[0].forward)
+    assert set(sig.parameters.keys()) == {"hidden_states", "encoder_hidden_states"}
+    assert "torch.Tensor" in str(sig.return_annotation)
+    assert model.blocks[0].forward("x") == "x"

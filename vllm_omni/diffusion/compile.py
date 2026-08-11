@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+import functools
 from collections.abc import Callable
 from typing import Any
 
@@ -42,6 +43,11 @@ def _with_eager_fallback(
     """Run the compiled forward, permanently reverting to eager on compiler errors."""
     fell_back = False
 
+    # functools.wraps sets __wrapped__ so inspect.signature() resolves to the
+    # original forward. cache-dit's BlockAdapter matches blocks by inspecting
+    # forward's parameter names and return annotation (build 2954, Multi-GPU
+    # Layered job); a bare (*args, **kwargs) wrapper breaks that match.
+    @functools.wraps(eager_forward)
     def forward(*args: Any, **kwargs: Any) -> Any:
         nonlocal fell_back
         if fell_back:
