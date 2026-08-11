@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-import functools
-from collections.abc import Callable
 from typing import Any
 
 import torch
@@ -9,63 +7,6 @@ import torch.nn as nn
 from vllm.logger import init_logger
 
 logger = init_logger(__name__)
-
-
-def _compile_error_types() -> tuple[type[BaseException], ...]:
-    """Exception types that mean "the compiler failed", not "the model failed".
-
-    torch.compile work happens lazily on the first call, so compiler bugs
-    (e.g. inductor's CantSplit on fp8 FLUX with two dynamic dims) surface at
-    dummy-run time, past regionally_compile's own try/except. Only these types
-    are safe to fall back on: they are raised before the compiled kernel runs.
-    """
-    types: list[type[BaseException]] = []
-    try:
-        from torch._dynamo.exc import BackendCompilerFailed
-
-        types.append(BackendCompilerFailed)
-    except ImportError:
-        pass
-    try:
-        from torch._inductor.exc import InductorError
-
-        types.append(InductorError)
-    except ImportError:
-        pass
-    return tuple(types)
-
-
-def _with_eager_fallback(
-    block_name: str,
-    eager_forward: Callable[..., Any],
-    compiled_forward: Callable[..., Any],
-) -> Callable[..., Any]:
-    """Run the compiled forward, permanently reverting to eager on compiler errors."""
-    fell_back = False
-
-    # functools.wraps sets __wrapped__ so inspect.signature() resolves to the
-    # original forward. cache-dit's BlockAdapter matches blocks by inspecting
-    # forward's parameter names and return annotation (build 2954, Multi-GPU
-    # Layered job); a bare (*args, **kwargs) wrapper breaks that match.
-    @functools.wraps(eager_forward)
-    def forward(*args: Any, **kwargs: Any) -> Any:
-        nonlocal fell_back
-        if fell_back:
-            return eager_forward(*args, **kwargs)
-        try:
-            return compiled_forward(*args, **kwargs)
-        except _compile_error_types() as exc:
-            fell_back = True
-            logger.warning_once(
-                "torch.compile failed lazily for repeated block %s (%s: %s); "
-                "falling back to eager for the affected block(s).",
-                block_name,
-                type(exc).__name__,
-                exc,
-            )
-            return eager_forward(*args, **kwargs)
-
-    return forward
 
 
 def _matches_repeated_block(
@@ -126,11 +67,7 @@ def regionally_compile(
             compiled_forwards.append(
                 (
                     submod,
-                    _with_eager_fallback(
-                        name,
-                        submod.forward,
-                        torch.compile(submod.forward, *compile_args, **compile_kwargs),
-                    ),
+                    torch.compile(submod.forward, *compile_args, **compile_kwargs),
                 )
             )
 
