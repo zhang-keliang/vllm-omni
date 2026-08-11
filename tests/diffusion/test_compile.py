@@ -76,35 +76,47 @@ def test_regionally_compile_does_not_partially_mutate_on_setup_failure(monkeypat
     assert [block.forward.__func__ for block in model.transformer_blocks] == original_forwards
 
 
-def test_compiled_block_preserves_forward_signature_for_inspection(monkeypatch):
-    """cache-dit matches blocks via inspect.signature(block.forward).
+def test_compiled_block_falls_back_to_eager_on_inductor_error(monkeypatch):
+    """A lazy compiler failure must not take the engine down.
 
-    Whatever regionally_compile installs as the block forward must stay
-    signature-transparent: parameter names and the return annotation drive
-    cache-dit's ForwardPattern match (build 2954, Multi-GPU Layered job
-    failed when a bare *args/**kwargs wrapper hid them; torch.compile's own
-    wrapper preserves the signature).
+    torch.compile work happens on the first call, so an inductor bug (e.g.
+    CantSplit on fp8 FLUX with two dynamic dims, build 2953 Quantization
+    Test) surfaces at dummy-run time. The block must revert to eager and
+    stay eager.
     """
-    import inspect
+    from torch._inductor.exc import InductorError
 
-    import torch
+    model = _ModelWithWrappedRepeatedBlocks()
+    attempts = []
 
-    class _SignatureBlock(nn.Module):
-        def forward(self, hidden_states, encoder_hidden_states=None) -> "torch.Tensor":
-            return hidden_states
+    def _compile(fn, *args, **kwargs):
+        def _compiled(*fn_args, **fn_kwargs):
+            attempts.append("compiled")
+            raise InductorError(RuntimeError("CantSplit: 15360*s31 + 15360*s87"), None)
 
-    class _Model(nn.Module):
-        _repeated_blocks = ["_SignatureBlock"]
+        return _compiled
 
-        def __init__(self) -> None:
-            super().__init__()
-            self.blocks = nn.ModuleList([_SignatureBlock()])
-
-    model = _Model()
-    monkeypatch.setattr(compile_module.torch, "compile", lambda fn, *a, **k: fn)
+    monkeypatch.setattr(compile_module.torch, "compile", _compile)
     regionally_compile(model)
 
-    sig = inspect.signature(model.blocks[0].forward)
-    assert set(sig.parameters.keys()) == {"hidden_states", "encoder_hidden_states"}
-    assert "torch.Tensor" in str(sig.return_annotation)
-    assert model.blocks[0].forward("x") == "x"
+    block = model.transformer_blocks[0]
+    assert block.forward("x") == "x"  # first call: compiled raises, eager answers
+    assert block.forward("y") == "y"  # second call: stays eager
+    assert attempts == ["compiled"]  # compiled path was not retried
+
+
+def test_compiled_block_does_not_swallow_model_errors(monkeypatch):
+    """Real model failures inside the compiled forward must propagate."""
+    model = _ModelWithWrappedRepeatedBlocks()
+
+    def _compile(fn, *args, **kwargs):
+        def _compiled(*fn_args, **fn_kwargs):
+            raise ValueError("genuine model bug")
+
+        return _compiled
+
+    monkeypatch.setattr(compile_module.torch, "compile", _compile)
+    regionally_compile(model)
+
+    with pytest.raises(ValueError, match="genuine model bug"):
+        model.transformer_blocks[0].forward("x")
