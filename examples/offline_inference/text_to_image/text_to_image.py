@@ -13,7 +13,7 @@ import torch
 from diffusers.utils import numpy_to_pil
 
 from vllm_omni.diffusion.data import logger
-from vllm_omni.diffusion.utils.image_output import extract_images_from_outputs
+from vllm_omni.diffusion.utils.image_output import coerce_images_to_pil, extract_images_from_outputs
 from vllm_omni.diffusion.utils.param_utils import apply_declared_extra_args
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.entrypoints.openai.stage_params import clone_sampling_params
@@ -655,6 +655,10 @@ def main():
 
     if not images:
         images = extract_images_from_outputs(outputs)
+    else:
+        # `.images` may hold tensors or NumPy arrays (e.g. LingBot T2I emits
+        # NumPy for the image serving path); `.save()` below requires PIL.
+        images = coerce_images_to_pil(images)
 
     if not images:
         raise ValueError("No images found in request_output")
