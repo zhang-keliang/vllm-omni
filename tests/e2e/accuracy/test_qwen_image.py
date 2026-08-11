@@ -37,10 +37,6 @@ SSIM_THRESHOLD = 0.94
 # that path only.
 SSIM_THRESHOLD_SDPA_FALLBACK = 0.96
 PSNR_THRESHOLD = 30.0
-# Same rationale as the SSIM fallback gate: the SDPA-matched comparison
-# fluctuates near both gates run-to-run (SSIM 0.9687 / PSNR >= 30 in build
-# 2954, SSIM >= 0.96 / PSNR 28.66 in build 2956).
-PSNR_THRESHOLD_SDPA_FALLBACK = 28.0
 
 MODEL_2512_ID = "Qwen/Qwen-Image-2512"
 MODEL_2512_ENV_VAR = "QWEN_IMAGE_2512_MODEL"
@@ -264,7 +260,7 @@ def test_qwen_image_matches_diffusers(accuracy_artifact_root: Path) -> None:
         width=WIDTH,
         height=HEIGHT,
         ssim_threshold=SSIM_THRESHOLD if _flash_attn3_hub_available() else SSIM_THRESHOLD_SDPA_FALLBACK,
-        psnr_threshold=PSNR_THRESHOLD if _flash_attn3_hub_available() else PSNR_THRESHOLD_SDPA_FALLBACK,
+        psnr_threshold=PSNR_THRESHOLD,
     )
 
 
