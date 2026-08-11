@@ -32,19 +32,7 @@ _synthetic_media_fallback_dir: Path | None = None
 def _resolve_synthetic_media_cache_dir(cache_dir: Path | str | None) -> Path:
     if cache_dir is not None:
         return Path(cache_dir).expanduser().resolve()
-    default = Path(tempfile.gettempdir()) / "vllm_omni_test_synthetic_media"
-    try:
-        default.mkdir(parents=True, exist_ok=True)
-        probe = default / f".write_probe_{os.getpid()}"
-        probe.write_bytes(b"")
-        probe.unlink()
-        return default
-    except OSError:
-        # The shared /tmp cache may be owned by another user (e.g. created by
-        # a root-run CI job), which makes it read-only for the current
-        # process. Fall back to a per-user cache dir so synthetic media can
-        # still be generated and cached.
-        return Path(tempfile.gettempdir()) / f"vllm_omni_test_synthetic_media_{os.getuid()}"
+    return Path(tempfile.gettempdir()) / "vllm_omni_test_synthetic_media"
 
 
 def _np_array_from_mp4_bytes(video_bytes: bytes) -> np.ndarray:
