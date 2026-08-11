@@ -4,7 +4,6 @@
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
-import numpy as np
 import torch
 from PIL import Image
 from vllm.outputs import RequestOutput
@@ -83,18 +82,6 @@ def _image_values_from_mapping_like(value: Any) -> Iterable[Any]:
             yield value[key]
 
 
-def coerce_images_to_pil(payload: Any) -> list[Image.Image]:
-    """Coerce a raw images payload to PIL images.
-
-    Accepts PIL images, torch tensors, NumPy arrays, and (nested) lists of
-    those. Pipelines are allowed to fill ``OmniRequestOutput.images`` with
-    tensors or arrays (e.g. LingBot T2I emits NumPy for the image serving
-    path); consumers that need PIL — such as the doc examples' ``.save()``
-    calls — must go through this coercion.
-    """
-    return _coerce_images(payload)
-
-
 def _coerce_images(payload: Any) -> list[Image.Image]:
     if payload is None:
         return []
@@ -102,31 +89,12 @@ def _coerce_images(payload: Any) -> list[Image.Image]:
         return [payload]
     if isinstance(payload, torch.Tensor):
         return _tensor_to_images(payload)
-    if isinstance(payload, np.ndarray):
-        return _ndarray_to_images(payload)
     if isinstance(payload, list | tuple):
         images: list[Image.Image] = []
         for item in payload:
             images.extend(_coerce_images(item))
         return images
     return []
-
-
-def _ndarray_to_images(array: np.ndarray) -> list[Image.Image]:
-    if array.ndim > 3:
-        images: list[Image.Image] = []
-        for single in array:
-            images.extend(_ndarray_to_images(single))
-        return images
-    if array.ndim != 3:
-        return []
-    if np.issubdtype(array.dtype, np.integer):
-        arr = array
-        if arr.shape[0] in (1, 3, 4):
-            arr = np.moveaxis(arr, 0, -1)
-        return [Image.fromarray(np.ascontiguousarray(arr.astype(np.uint8)))]
-    # Float arrays share the tensor normalization ([-1, 1] or [0, 1] -> uint8).
-    return _tensor_to_images(torch.from_numpy(np.ascontiguousarray(array)))
 
 
 def _tensor_to_images(tensor: torch.Tensor) -> list[Image.Image]:
