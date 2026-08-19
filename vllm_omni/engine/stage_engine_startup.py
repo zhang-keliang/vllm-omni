@@ -22,6 +22,7 @@ from vllm.utils.network_utils import get_open_ports_list, zmq_socket_ctx
 from vllm.v1.engine.coordinator import DPCoordinator
 from vllm.v1.engine.utils import (
     CoreEngine,
+    CoreEngineLaunch,
     CoreEngineProcManager,
     EngineZmqAddresses,
     get_engine_zmq_addresses,
@@ -833,13 +834,16 @@ def connect_remote_engine_cores(
             )
             wait_for_engine_startup(
                 handshake_socket,
-                addresses,
                 engines_to_handshake,
                 vllm_config.parallel_config,
                 False,  # coordinated_dp
                 vllm_config.cache_config,
-                None,  # proc_manager (remote — no local procs)
-                None,  # coord_process
+                CoreEngineLaunch(
+                    engine_manager=None,  # remote — no local procs
+                    coordinator=None,
+                    addresses=addresses,
+                    tensor_queue=None,
+                ),
             )
     finally:
         omni_master_server.release_route_port_reservations(
@@ -875,13 +879,16 @@ def connect_remote_diffusion_proc(
             yield StageReplicaResources(addresses=addresses)
             wait_for_engine_startup(
                 handshake_socket,
-                addresses,
                 [CoreEngine(index=0, local=False)],
                 _single_diffusion_parallel_config(local_client=False),
                 False,
                 None,
-                None,
-                None,
+                CoreEngineLaunch(
+                    engine_manager=None,  # remote — no local procs
+                    coordinator=None,
+                    addresses=addresses,
+                    tensor_queue=None,
+                ),
             )
     finally:
         omni_master_server.release_route_port_reservations(
@@ -1077,13 +1084,16 @@ def _launch_omni_core_engines(
             yield local_engine_manager, coordinator, addresses
             wait_for_engine_startup(
                 handshake_socket,
-                addresses,
                 engines_to_handshake,
                 parallel_config,
                 parallel_config.data_parallel_size > 1 and vllm_config.model_config.is_moe,
                 vllm_config.cache_config,
-                local_engine_manager,
-                coordinator.proc if coordinator else None,
+                CoreEngineLaunch(
+                    engine_manager=local_engine_manager,
+                    coordinator=coordinator,
+                    addresses=addresses,
+                    tensor_queue=None,
+                ),
             )
     finally:
         omni_master_server.release_route_port_reservations(
@@ -1166,13 +1176,16 @@ def launch_stage_replica(
         )
         wait_for_engine_startup(
             handshake_socket,
-            addresses,
             engines_to_handshake,
             vllm_config.parallel_config,
             False,  # coordinated_dp
             vllm_config.cache_config,
-            engine_manager,
-            None,  # coordinator_proc
+            CoreEngineLaunch(
+                engine_manager=engine_manager,
+                coordinator=None,
+                addresses=addresses,
+                tensor_queue=None,
+            ),
         )
 
 

@@ -885,6 +885,7 @@ def test_sample_tokens_tail_only_prefix_cache_uses_staged_cpu_hidden_states(monk
         lambda *args, **kwargs: (
             0,
             None,
+            None,
             [],
             None,
             ["r1", "r2"],

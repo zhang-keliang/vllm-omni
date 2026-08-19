@@ -74,6 +74,7 @@ def _send_inpaint_with_generator(
 
 @pytest.mark.slow
 @pytest.mark.diffusion
+@pytest.mark.advanced_model
 @hardware_test(res={"cuda": "L4"}, num_cards=1)
 def test_flux2_klein_inpaint_deterministic(omni_runner_handler: OmniRunnerHandler):
     input_image, mask_image = _create_test_inputs()
@@ -95,6 +96,7 @@ def test_flux2_klein_inpaint_deterministic(omni_runner_handler: OmniRunnerHandle
 
 @pytest.mark.slow
 @pytest.mark.diffusion
+@pytest.mark.advanced_model
 @hardware_test(res={"cuda": "L4"}, num_cards=1)
 def test_flux2_klein_inpaint_different_seeds_different_output(omni_runner_handler: OmniRunnerHandler):
     input_image, mask_image = _create_test_inputs()

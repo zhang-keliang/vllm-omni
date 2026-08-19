@@ -581,18 +581,18 @@ def test_mm_only_terminal_finish_removes_request_state(monkeypatch):
 
 def test_no_detokenizer_make_request_output_with_routed_experts():
     """make_request_output accepts the routed_experts arg that the multimodal
-    output channel (_process_mm_only_outputs) passes positionally, and attaches
-    it to the completion output.
+    output channel (_process_mm_only_outputs) passes, and attaches it to the
+    completion output.
 
-    Regression: the call site passes 6 positional args
-    (..., kv_transfer_params, routed_experts) but the override previously took
-    only 5, raising TypeError on every generation-stage output.
+    routed_experts is omni-specific keyword-only: the 6th positional now
+    matches upstream's ec_transfer_params so that super().process_outputs()
+    calls do not misroute it.
     """
     s = _make_no_detok_state(RequestOutputKind.CUMULATIVE)
     s.add_multimodal_tensor(torch.randn(10), mm_type=AUDIO)
     routed_experts = np.zeros((2, 3), dtype=np.int32)
     # Mirror the exact call shape of _process_mm_only_outputs.
-    result = s.make_request_output([], None, FinishReason.STOP, None, None, routed_experts)
+    result = s.make_request_output([], None, FinishReason.STOP, None, None, routed_experts=routed_experts)
     assert result is not None
     assert not isinstance(result, PoolingRequestOutput)
     assert result.outputs[0].routed_experts is routed_experts
